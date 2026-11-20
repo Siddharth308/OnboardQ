@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     max_upload_mb: int = Field(default=10, ge=1, le=100)
     max_upload_rows: int = Field(default=50_000, ge=1)
     upload_dir: Path = Path("data/uploads")
+    schemas_dir: Path = Path("schemas")
 
     @property
     def max_upload_bytes(self) -> int:

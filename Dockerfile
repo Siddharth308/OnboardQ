@@ -24,6 +24,7 @@ RUN groupadd --system app && useradd --system --gid app --home /app app
 WORKDIR /app
 COPY --from=builder --chown=app:app /build/.venv /app/.venv
 COPY --chown=app:app app ./app
+COPY --chown=app:app schemas ./schemas
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

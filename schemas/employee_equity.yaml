@@ -1,0 +1,94 @@
+# Target schema: employee equity onboarding.
+# `description` is what RAG retrieves in Phase 5, so write it for a reader
+# who must decide which customer column matches this field.
+# `synonyms` are known alternative header names, used by the rule matcher.
+# `transform` is the default transform the rule matcher proposes (see spec §1.5).
+name: employee_equity
+version: 1
+description: Employee equity grants imported from a customer's HR and equity tools.
+fields:
+  - name: employee_id
+    type: string
+    required: true
+    unique: true
+    description: Unique identifier of the employee in the customer's HR system.
+    synonyms: [emp id, employee no, employee number, staff id, staff number, emp no, employee code]
+    transform: trim
+
+  - name: first_name
+    type: string
+    required: true
+    description: The employee's given name. Not the full name.
+    synonyms: [given name, fname, first]
+    transform: trim
+
+  - name: last_name
+    type: string
+    required: true
+    description: The employee's family name or surname.
+    synonyms: [surname, lname, last, family name]
+    transform: trim
+
+  - name: email
+    type: email
+    required: true
+    description: The employee's work email address.
+    synonyms: [work email, email address, e-mail, mail]
+    transform: lowercase
+
+  - name: date_of_joining
+    type: date
+    required: true
+    description: The date the employee joined the company (ISO 8601 after parsing).
+    synonyms: [joining date, join date, joined, doj, start date, hire date, date joined]
+    transform: parse_date
+
+  - name: department
+    type: string
+    required: false
+    description: The department or team the employee belongs to.
+    synonyms: [dept, team, business unit]
+    transform: trim
+
+  - name: grant_id
+    type: string
+    required: true
+    description: Identifier of the equity grant, unique per grant.
+    synonyms: [grant number, grant no, option grant id, award id]
+    transform: trim
+
+  - name: grant_date
+    type: date
+    required: true
+    description: The date the equity grant was made. Cannot be in the future.
+    synonyms: [grant dt, date of grant, award date]
+    transform: parse_date
+
+  - name: options_granted
+    type: integer
+    required: true
+    description: Number of stock options granted. A positive whole number.
+    synonyms: [options, no of options, number of options, shares granted, units granted, quantity]
+    transform: to_int
+
+  - name: exercise_price
+    type: decimal
+    required: true
+    description: Price per share at which the options can be exercised. Non-negative, currency symbols removed.
+    synonyms: [strike price, exercise px, option price, grant price, price per share]
+    transform: strip_currency
+
+  - name: vesting_schedule
+    type: enum
+    required: true
+    allowed_values: [4Y_1Y_CLIFF, 3Y_MONTHLY, CUSTOM]
+    description: How the options vest over time. One of 4-year with 1-year cliff, 3-year monthly, or custom.
+    synonyms: [vesting, vesting plan, vest schedule, vesting type]
+    transform: map_enum
+
+  - name: country
+    type: country
+    required: true
+    description: The employee's country of residence, as an ISO 3166-1 alpha-2 code.
+    synonyms: [country code, nation, location country, country of residence]
+    transform: normalize_country
