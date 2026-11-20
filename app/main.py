@@ -9,12 +9,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.v1 import health, jobs
+from app.api.v1 import health, jobs, schemas
 from app.core.config import Settings, get_settings
 from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import RequestIDMiddleware
 from app.db.session import create_engine, create_session_factory
+from app.pipeline.schema_registry import SchemaRegistry
 
 
 @asynccontextmanager
@@ -38,11 +39,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = create_session_factory(engine)
+    app.state.registry = SchemaRegistry.from_directory(settings.schemas_dir)
 
     app.add_middleware(RequestIDMiddleware)
     register_error_handlers(app)
     app.include_router(health.router)
     app.include_router(jobs.router)
+    app.include_router(schemas.router)
     return app
 
 

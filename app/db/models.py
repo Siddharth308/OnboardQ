@@ -32,6 +32,8 @@ class Job(Base):
     column_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Column profile, already PII-masked. Never raw cell values.
     profile: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Proposed mapping (MappingProposal JSON). Written by the rule matcher, later the LLM.
+    mapping: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     # Python-side defaults, not SQL expressions. A SQL default leaves the attribute
     # expired after flush, and reading it in async code then fails with MissingGreenlet.
