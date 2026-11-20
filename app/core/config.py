@@ -5,6 +5,7 @@ malformed value fails the process at startup, not on the first request.
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
@@ -31,6 +32,11 @@ class Settings(BaseSettings):
 
     max_upload_mb: int = Field(default=10, ge=1, le=100)
     max_upload_rows: int = Field(default=50_000, ge=1)
+    upload_dir: Path = Path("data/uploads")
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.max_upload_mb * 1024 * 1024
 
 
 @lru_cache

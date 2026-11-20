@@ -11,6 +11,13 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "structlog>=24.4",
+    "sqlalchemy>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pandas>=2.2",
+    "openpyxl>=3.1",
+    "python-multipart>=0.0.12",
+    "greenlet>=3.5.6",
 ]
 
 [dependency-groups]
@@ -23,6 +30,9 @@ dev = [
     "mypy>=1.13",
     "pre-commit>=4.0",
     "pip-audit>=2.7",
+    "aiosqlite>=0.20",
+    "pandas-stubs>=3.1.0.261029",
+    "types-openpyxl>=3.1.5.20261017",
 ]
 
 [build-system]
