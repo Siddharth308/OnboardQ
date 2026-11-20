@@ -65,7 +65,7 @@ async def test_migration_creates_jobs_table_and_app_works_end_to_end(pg_app: Fas
             "/v1/jobs",
             files={"file": ("staff.csv", b"Emp ID,Salary\nE1,100\nE2,\n", "text/csv")},
         )
-        assert upload.status_code == 201
+        assert upload.status_code == 202
         job_id = upload.json()["id"]
 
         profile = await client.get(f"/v1/jobs/{job_id}/profile")

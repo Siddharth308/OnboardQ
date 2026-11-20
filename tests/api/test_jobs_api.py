@@ -7,6 +7,7 @@ from openpyxl import Workbook
 from sqlalchemy import select
 
 from app.db.models import Job
+from app.services import jobs as job_service
 
 MESSY_CSV = (
     b"Emp ID;Full Name;Work Email;Joined;Salary\n"
@@ -16,26 +17,35 @@ MESSY_CSV = (
 )
 
 
-def _csv(name: str, data: bytes) -> dict[str, tuple[str, bytes, str]]:
+def _file(name: str, data: bytes) -> dict[str, tuple[str, bytes, str]]:
     return {"file": (name, data, "text/csv")}
 
 
-async def test_upload_csv_returns_201_and_job(client: AsyncClient) -> None:
-    response = await client.post("/v1/jobs", files=_csv("staff.csv", MESSY_CSV))
+async def _upload(client: AsyncClient, name: str = "staff.csv", data: bytes = MESSY_CSV) -> str:
+    response = await client.post("/v1/jobs", files=_file(name, data))
+    assert response.status_code == 202, response.text
+    return str(response.json()["id"])
 
-    assert response.status_code == 201
+
+async def test_upload_returns_202_and_job_is_processed_in_background(client: AsyncClient) -> None:
+    response = await client.post("/v1/jobs", files=_file("staff.csv", MESSY_CSV))
+
+    assert response.status_code == 202
     body = response.json()
-    assert body["status"] == "PROFILING"
-    assert body["filename"] == "staff.csv"
-    assert body["row_count"] == 3
-    assert body["column_count"] == 5
-    uuid.UUID(body["id"])  # raises if not a valid id
+    assert body["status"] == "UPLOADED"  # state at the moment the response was built
+    uuid.UUID(body["id"])
+
+    # The background task has run by the time the request returns, so the final state is visible.
+    final = (await client.get(f"/v1/jobs/{body['id']}")).json()
+    assert final["status"] == "AWAITING_REVIEW"
+    assert final["row_count"] == 3
+    assert final["column_count"] == 5
 
 
 async def test_profile_endpoint_returns_column_stats(client: AsyncClient) -> None:
-    job = (await client.post("/v1/jobs", files=_csv("staff.csv", MESSY_CSV))).json()
+    job_id = await _upload(client)
 
-    response = await client.get(f"/v1/jobs/{job['id']}/profile")
+    response = await client.get(f"/v1/jobs/{job_id}/profile")
 
     assert response.status_code == 200
     body = response.json()
@@ -48,22 +58,60 @@ async def test_profile_endpoint_returns_column_stats(client: AsyncClient) -> Non
     assert columns["Work Email"]["sample_values"][0] == "***@acme.com"
 
 
-async def test_profile_never_contains_raw_pii(client: AsyncClient) -> None:
-    job = (await client.post("/v1/jobs", files=_csv("staff.csv", MESSY_CSV))).json()
+async def test_profile_and_mapping_never_contain_raw_pii(client: AsyncClient) -> None:
+    job_id = await _upload(client)
 
-    response = await client.get(f"/v1/jobs/{job['id']}/profile")
+    profile = await client.get(f"/v1/jobs/{job_id}/profile")
+    mapping = await client.get(f"/v1/jobs/{job_id}/mapping")
 
-    assert "asha@acme.com" not in response.text
-    assert "Asha Rao" not in response.text
+    for response in (profile, mapping):
+        assert "asha@acme.com" not in response.text
+        assert "Asha Rao" not in response.text
+
+
+async def test_mapping_endpoint_returns_rule_proposal(client: AsyncClient) -> None:
+    job_id = await _upload(client)
+
+    response = await client.get(f"/v1/jobs/{job_id}/mapping")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["target_schema"] == "employee_equity"
+    assert body["method"] == "rules"
+    by_target = {m["target_field"]: m for m in body["mappings"]}
+    assert by_target["employee_id"]["source_columns"] == ["Emp ID"]
+    assert by_target["email"]["source_columns"] == ["Work Email"]
+    assert by_target["date_of_joining"]["source_columns"] == ["Joined"]
+    assert "options_granted" in body["missing_required_fields"]
+    assert "Full Name" in body["unmapped_source_columns"]
+
+
+async def test_list_schemas(client: AsyncClient) -> None:
+    response = await client.get("/v1/schemas")
+
+    assert response.status_code == 200
+    names = [s["name"] for s in response.json()]
+    assert "employee_equity" in names
+
+
+async def test_unknown_target_schema_returns_422(client: AsyncClient) -> None:
+    response = await client.post(
+        "/v1/jobs",
+        files=_file("staff.csv", MESSY_CSV),
+        data={"target_schema": "no_such_schema"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["title"] == "Unknown target schema"
 
 
 async def test_get_job_returns_status(client: AsyncClient) -> None:
-    job = (await client.post("/v1/jobs", files=_csv("staff.csv", MESSY_CSV))).json()
+    job_id = await _upload(client)
 
-    response = await client.get(f"/v1/jobs/{job['id']}")
+    response = await client.get(f"/v1/jobs/{job_id}")
 
     assert response.status_code == 200
-    assert response.json()["id"] == job["id"]
+    assert response.json()["id"] == job_id
 
 
 async def test_upload_xlsx(client: AsyncClient) -> None:
@@ -75,23 +123,15 @@ async def test_upload_xlsx(client: AsyncClient) -> None:
     buffer = io.BytesIO()
     workbook.save(buffer)
 
-    response = await client.post(
-        "/v1/jobs",
-        files={
-            "file": (
-                "staff.xlsx",
-                buffer.getvalue(),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
-    )
+    job_id = await _upload(client, "staff.xlsx", buffer.getvalue())
 
-    assert response.status_code == 201
-    assert response.json()["column_count"] == 2
+    job = (await client.get(f"/v1/jobs/{job_id}")).json()
+    assert job["status"] == "AWAITING_REVIEW"
+    assert job["column_count"] == 2
 
 
 async def test_unsupported_extension_returns_problem_json_415(client: AsyncClient) -> None:
-    response = await client.post("/v1/jobs", files=_csv("payload.exe", b"MZ"))
+    response = await client.post("/v1/jobs", files=_file("payload.exe", b"MZ"))
 
     assert response.status_code == 415
     assert response.headers["content-type"].startswith("application/problem+json")
@@ -101,10 +141,9 @@ async def test_unsupported_extension_returns_problem_json_415(client: AsyncClien
 
 
 async def test_oversized_upload_is_rejected_with_413(client: AsyncClient) -> None:
-    # The fixture app uses the default 10 MB limit. A 11 MB body exceeds it.
     too_big = b"a,b\n" + b"1,2\n" * (11 * 1024 * 1024 // 4)
 
-    response = await client.post("/v1/jobs", files=_csv("big.csv", too_big))
+    response = await client.post("/v1/jobs", files=_file("big.csv", too_big))
 
     assert response.status_code == 413
     assert response.json()["status"] == 413
@@ -113,13 +152,12 @@ async def test_oversized_upload_is_rejected_with_413(client: AsyncClient) -> Non
 async def test_bad_target_schema_returns_422_without_echoing_input(client: AsyncClient) -> None:
     response = await client.post(
         "/v1/jobs",
-        files=_csv("staff.csv", MESSY_CSV),
+        files=_file("staff.csv", MESSY_CSV),
         data={"target_schema": "Drop Table; --"},
     )
 
     assert response.status_code == 422
-    body = response.json()
-    assert body["title"] == "Validation failed"
+    assert response.json()["title"] == "Validation failed"
     assert "Drop Table" not in response.text  # errors do not echo the submitted value
 
 
@@ -130,18 +168,32 @@ async def test_unknown_job_returns_404(client: AsyncClient) -> None:
     assert response.headers["content-type"].startswith("application/problem+json")
 
 
-async def test_empty_csv_is_rejected_and_job_is_marked_failed(
+async def test_empty_csv_is_marked_failed_with_reason(client: AsyncClient) -> None:
+    job_id = await _upload(client, "empty.csv", b"")
+
+    job = (await client.get(f"/v1/jobs/{job_id}")).json()
+    assert job["status"] == "FAILED"
+    assert job["error_reason"] == "The file has no header row."
+
+    assert (await client.get(f"/v1/jobs/{job_id}/profile")).status_code == 409
+    assert (await client.get(f"/v1/jobs/{job_id}/mapping")).status_code == 409
+
+
+async def test_rerunning_pipeline_on_finished_job_is_a_no_op(
     client: AsyncClient, app: FastAPI
 ) -> None:
-    response = await client.post("/v1/jobs", files=_csv("empty.csv", b""))
+    job_id = await _upload(client)
+    job_uuid = uuid.UUID(job_id)
 
-    assert response.status_code == 422
-    assert response.json()["title"] == "Empty file"
     async with app.state.session_factory() as session:
-        job = (await session.execute(select(Job))).scalar_one()
-    assert job.status == "FAILED"
-    assert job.error_reason is not None
+        before = (await session.execute(select(Job).where(Job.id == job_uuid))).scalar_one()
+        updated_before = before.updated_at
 
-    profile = await client.get(f"/v1/jobs/{job.id}/profile")
-    assert profile.status_code == 409
-    assert profile.json()["status"] == 409
+    await job_service.run_pipeline(
+        job_uuid, app.state.settings, app.state.session_factory, app.state.registry
+    )
+
+    async with app.state.session_factory() as session:
+        after = (await session.execute(select(Job).where(Job.id == job_uuid))).scalar_one()
+    assert after.status == "AWAITING_REVIEW"
+    assert after.updated_at == updated_before
